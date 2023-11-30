@@ -193,7 +193,6 @@ class Trainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        self.model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
@@ -224,6 +223,8 @@ class Trainer:
                 self.val()
 
             self.step += 1
+
+        self.model_lr_scheduler.step()
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses

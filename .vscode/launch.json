@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "args": [
+                "--data_path", "kitti_data",
+                "--dataset", "kitti",
+                "--pose_model_input", "all",
+                "--num_workers", "1",
+                "--png",
+                "--split", "eigen_zhou",
+                "--log_dir", "${workspaceFolder}/models",
+                "--model_name", "debug",
+                "--no_cuda",
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

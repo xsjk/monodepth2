@@ -46,6 +46,12 @@ def resnet_multiimage_input(num_layers, pretrained=False, num_input_images=1):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         num_input_images (int): Number of frames stacked as input
     """
+    if num_input_images == 1:
+        return getattr(models.resnet, f"resnet{num_layers}")(
+            weights=getattr(models.resnet, f"ResNet{num_layers}_Weights").DEFAULT 
+            if pretrained else None
+        )
+    
     assert num_layers in [18, 50], "Can only run with 18 or 50 layer resnet"
     blocks = {18: [2, 2, 2, 2], 50: [3, 4, 6, 3]}[num_layers]
     block_type = {18: models.resnet.BasicBlock, 50: models.resnet.Bottleneck}[num_layers]
@@ -68,19 +74,12 @@ class ResnetEncoder(nn.Module):
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
 
-        resnets = {18: models.resnet18,
-                   34: models.resnet34,
-                   50: models.resnet50,
-                   101: models.resnet101,
-                   152: models.resnet152}
-
-        if num_layers not in resnets:
-            raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
-
-        if num_input_images > 1:
-            self.encoder = resnet_multiimage_input(num_layers, pretrained, num_input_images)
-        else:
-            self.encoder = resnets[num_layers](pretrained)
+        try:
+            resnet = getattr(models, f"resnet{num_layers}")
+        except AttributeError:
+            raise ValueError(f"{num_layers} is not a valid number of resnet layers")
+        
+        self.encoder = resnet_multiimage_input(num_layers, pretrained, num_input_images)
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
