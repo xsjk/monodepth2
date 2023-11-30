@@ -4,8 +4,6 @@
 # which allows for non-commercial use only, the full terms of which are made
 # available in the LICENSE file.
 
-from __future__ import absolute_import, division, print_function
-
 import numpy as np
 import time
 
@@ -60,6 +58,12 @@ class Trainer:
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
+
+        self.models["normal"] = networks.NormalDecoder(
+            self.models["encoder"].num_ch_enc, self.opt.scales)
+        self.models["normal"].to(self.device)
+        self.parameters_to_train += list(self.models["normal"].parameters())
+        
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
@@ -247,7 +251,7 @@ class Trainer:
         else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+            outputs = self.models["depth"](features) | self.models["normal"](features)
 
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
@@ -345,15 +349,24 @@ class Trainer:
         """
         for scale in self.opt.scales:
             disp = outputs[("disp", scale)]
+            norm_x = outputs[("norm_x", scale)]
+            norm_y = outputs[("norm_y", scale)]
             if self.opt.v1_multiscale:
                 source_scale = scale
             else:
                 disp = F.interpolate(
                     disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                norm_x = F.interpolate(
+                    norm_x, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                norm_y = F.interpolate(
+                    norm_y, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
                 source_scale = 0
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
 
+            outputs[("norm", scale)] = torch.stack([
+                norm_x, norm_y, torch.ones_like(norm_x)], dim=-1)
+            outputs[("norm", scale)] /= torch.norm(outputs[("norm", scale)], dim=-1, keepdim=True)
             outputs[("depth", 0, scale)] = depth
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
@@ -385,7 +398,8 @@ class Trainer:
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],
-                    padding_mode="border")
+                    padding_mode="border",
+                    align_corners=True)
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
@@ -404,6 +418,15 @@ class Trainer:
             reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
 
         return reprojection_loss
+    
+    def compute_geometry_loss(self, norm_pred, depth_pred):
+        """Computes geometry loss between a batch of predicted and target images
+        """
+        n_frames = norm_pred.shape[1]
+        geometry_loss = torch.zeros_like(depth_pred)
+        for i in range(n_frames):
+            geometry_loss[:, i, :, :] = 0
+        return geometry_loss
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
@@ -459,6 +482,8 @@ class Trainer:
                 weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
                 loss += weighting_loss.mean()
 
+            geometry_loss = self.compute_geometry_loss(outputs[("norm", scale)], outputs[('depth', 0, scale)])
+
             if self.opt.avg_reprojection:
                 reprojection_loss = reprojection_losses.mean(1, keepdim=True)
             else:
@@ -472,6 +497,8 @@ class Trainer:
                 combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
             else:
                 combined = reprojection_loss
+            
+            combined += geometry_loss
 
             if combined.shape[1] == 1:
                 to_optimise = combined

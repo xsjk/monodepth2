@@ -12,9 +12,9 @@ from collections import OrderedDict
 from layers import *
 
 
-class DepthDecoder(nn.Module):
+class NormalDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True):
-        super(DepthDecoder, self).__init__()
+        super(NormalDecoder, self).__init__()
 
         self.num_output_channels = num_output_channels
         self.use_skips = use_skips
@@ -30,17 +30,20 @@ class DepthDecoder(nn.Module):
             # upconv_0
             num_ch_in = self.num_ch_enc[-1] if i == 4 else self.num_ch_dec[i + 1]
             num_ch_out = self.num_ch_dec[i]
-            self.convs[("upconv", i, 0)] = ConvBlock(num_ch_in, num_ch_out)
+            self.convs[("upconv_x", i, 0)] = ConvBlock(num_ch_in, num_ch_out)
+            self.convs[("upconv_y", i, 0)] = ConvBlock(num_ch_in, num_ch_out)
 
             # upconv_1
             num_ch_in = self.num_ch_dec[i]
             if self.use_skips and i > 0:
                 num_ch_in += self.num_ch_enc[i - 1]
             num_ch_out = self.num_ch_dec[i]
-            self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
+            self.convs[("upconv_x", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
+            self.convs[("upconv_y", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 
         for s in self.scales:
-            self.convs[("dispconv", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
+            self.convs[("normconv_x", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
+            self.convs[("normconv_y", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
 
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
@@ -50,14 +53,20 @@ class DepthDecoder(nn.Module):
 
         # decoder
         x = input_features[-1]
+        y = input_features[-1]
         for i in range(4, -1, -1):
-            x = self.convs[("upconv", i, 0)](x)
+            x = self.convs[("upconv_x", i, 0)](x)
+            y = self.convs[("upconv_y", i, 0)](y)
             x = [upsample(x)]
+            y = [upsample(y)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
+                y += [input_features[i - 1]]
             x = torch.cat(x, 1)
-            x = self.convs[("upconv", i, 1)](x)
+            y = torch.cat(y, 1)
+            x = self.convs[("upconv_x", i, 1)](x)
+            y = self.convs[("upconv_y", i, 1)](y)
             if i in self.scales:
-                self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
-
+                self.outputs[("norm_x", i)] = self.sigmoid(self.convs[("normconv_x", i)](x))
+                self.outputs[("norm_y", i)] = self.sigmoid(self.convs[("normconv_y", i)](y))
         return self.outputs
